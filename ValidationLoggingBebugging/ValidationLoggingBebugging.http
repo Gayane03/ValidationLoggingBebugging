@@ -1,0 +1,6 @@
+@ValidationLoggingBebugging_HostAddress = http://localhost:5042
+
+GET {{ValidationLoggingBebugging_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
