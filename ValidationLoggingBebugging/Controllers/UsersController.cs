@@ -1,4 +1,5 @@
 ﻿using Microsoft.AspNetCore.JsonPatch;
+using Microsoft.AspNetCore.JsonPatch.Operations;
 using Microsoft.AspNetCore.Mvc;
 using ValidationLoggingBebugging.Helpers;
 using ValidationLoggingBebugging.Models;
@@ -81,7 +82,7 @@ namespace ValidationLoggingBebugging.Controllers
 		}
 
 		[HttpPut("{id:int}")]
-		public ActionResult Put(int id, [FromBody] string value)
+		public ActionResult Put(int id, [FromBody] UserRequest userRequest)
 		{
 			logger.LogDebug("PUT called for user with id={Id}", id);
 
@@ -90,6 +91,27 @@ namespace ValidationLoggingBebugging.Controllers
 				logger.LogWarning("Model validation failed for PUT id={Id} at {Time}", id, DateTime.UtcNow);
 				return BadRequest(ModelState);
 			}
+
+			var user = UsersCollection.Users.FirstOrDefault(u => u.Id == id);
+			if (user is null)
+			{
+				logger.LogWarning("User with id={Id} not found", id);
+				return NotFound();
+			}
+
+			var createdUser = UsersCollection.Users.FirstOrDefault(u => u.Username == userRequest.Username);
+			if (createdUser is not null)
+			{
+				throw new DuplicateUsernameException();
+			}
+
+			user.Username = userRequest.Username;
+			user.Password = userRequest.Password;
+			user.DateOfBirth = userRequest.DateOfBirth;
+			user.Email = userRequest.Email;
+			user.Quantity = userRequest.Quantity;
+			user.Price = userRequest.Price;
+			user.Amount = userRequest.Amount;
 
 			logger.LogInformation("PUT successfully processed for id={Id}", id);
 			return Ok();
@@ -106,21 +128,45 @@ namespace ValidationLoggingBebugging.Controllers
 				return BadRequest("Invalid patch document");
 			}
 
+			if (!ModelState.IsValid)
+			{
+				logger.LogWarning("PATCH validation failed for id={Id}", id);
+				return BadRequest(ModelState);
+			}
+
 			var userToPatch = UsersCollection.Users.FirstOrDefault(u => u.Id == id);
 			if(userToPatch is null)
 			{
 				logger.LogWarning("User to patch not found with id={Id}", id);
 				return NotFound();
 			}
-			
-			patchDoc.ApplyTo(userToPatch, ModelState);
 
-			if (!ModelState.IsValid)
+
+			var isUsernameBeingUpdated = patchDoc.Operations.Any(op =>
+		              op.path.Equals("/Username", StringComparison.OrdinalIgnoreCase) &&
+		              op.OperationType is OperationType.Replace or OperationType.Add);
+
+			if (isUsernameBeingUpdated)
 			{
-				logger.LogWarning("PATCH validation failed for id={Id}", id);
-				return BadRequest(ModelState); 
+				logger.LogInformation("PATCH includes a Username update for user id={Id}", id);
+
+				var newUsername = patchDoc.Operations
+		             .First(op => op.path.Equals("/Username", StringComparison.OrdinalIgnoreCase))
+		             .value?.ToString();
+
+				var createdUser = UsersCollection.Users.FirstOrDefault(u => u.Username == newUsername);
+				if (createdUser is not null)
+				{
+					throw new DuplicateUsernameException();
+				}
+			}
+			else
+			{
+				logger.LogDebug("PATCH does not include a Username update for user id={Id}", id);
 			}
 
+			patchDoc.ApplyTo(userToPatch, ModelState);
+	
 			logger.LogInformation("User with id={Id} patched successfully", id);
 			return Ok();
 		}
