@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Diagnostics;
 using Serilog;
 using System.Text.Json;
 using ValidationLoggingBebugging.Helpers;
+using ValidationLoggingBebugging.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -13,12 +14,14 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
+
 builder.Services.AddControllers()
 	.AddFluentValidation(fv =>
 	{
 		fv.RegisterValidatorsFromAssemblyContaining<UserRequestValidator>();
 	});
 
+builder.Services.AddScoped<IUserService, UserService>();
 
 Log.Logger = new LoggerConfiguration()
 	.MinimumLevel.Debug()
