@@ -1,8 +1,7 @@
 ﻿using Microsoft.AspNetCore.JsonPatch;
-using Microsoft.AspNetCore.JsonPatch.Operations;
 using Microsoft.AspNetCore.Mvc;
-using ValidationLoggingBebugging.Helpers;
 using ValidationLoggingBebugging.Models;
+using ValidationLoggingBebugging.Services;
 
 // For more information on enabling Web API for empty projects, visit https://go.microsoft.com/fwlink/?LinkID=397860
 
@@ -13,25 +12,27 @@ namespace ValidationLoggingBebugging.Controllers
 	public class UsersController : ControllerBase
 	{
 		private readonly ILogger<UsersController> logger;
-		public UsersController(ILogger<UsersController> logger)
+		private readonly IUserService userService;
+
+		public UsersController(ILogger<UsersController> logger, IUserService userService)
 		{
-			this.logger = logger;	
+			this.logger = logger;
+			this.userService = userService;
 		}
 
 		[HttpGet]
 		public ActionResult<IEnumerable<User>> Get()
 		{
 			logger.LogDebug("GET all users called at {Time}", DateTime.UtcNow);
-
-			return Ok(UsersCollection.Users);
+			return Ok(userService.GetUsers());
 		}
 
 		[HttpGet("{id:int}")]
 		public ActionResult<User> Get(int id)
 		{
-			logger.LogDebug("GET user by ID called with id={Id}, at {Time} ", id, DateTime.UtcNow);
+			logger.LogDebug("GET user by ID called with id={Id} at {Time}", id, DateTime.UtcNow);
 
-			var user = UsersCollection.Users.FirstOrDefault(u => u.Id == id);
+			var user = userService.GetUserById(id);
 			if (user is null)
 			{
 				logger.LogWarning("User with id={Id} not found", id);
@@ -45,7 +46,7 @@ namespace ValidationLoggingBebugging.Controllers
 		[HttpPost]
 		public ActionResult<User> Post([FromBody] UserRequest userRequest)
 		{
-			logger.LogDebug("POST create user called with username={Username} at {Time} ", userRequest.Username, DateTime.UtcNow);
+			logger.LogDebug("POST create user called with username={Username} at {Time}", userRequest.Username, DateTime.UtcNow);
 
 			if (!ModelState.IsValid)
 			{
@@ -53,31 +54,7 @@ namespace ValidationLoggingBebugging.Controllers
 				return BadRequest(ModelState);
 			}
 
-			var createdUser = UsersCollection.Users.FirstOrDefault(u => u.Username == userRequest.Username);
-			if (createdUser is not null)
-			{				
-				throw new DuplicateUsernameException();
-			}
-
-			var lastUser = UsersCollection.Users.OrderBy(u => u.Id).LastOrDefault();
-			var newId = lastUser != null ? ++lastUser.Id : 1;
-
-			var newUser = new User()
-			{
-				Id = newId,
-				Username = userRequest.Username,
-				Email = userRequest.Email,
-				Password = userRequest.Password,
-				DateOfBirth = userRequest.DateOfBirth,
-				Quantity = userRequest.Quantity,
-				Price = userRequest.Price,
-				Amount = userRequest.Amount
-			};
-
-			UsersCollection.Users.Add(newUser);
-
-			logger.LogInformation("User added: {@User}", userRequest);
-
+			var newUser = userService.CreateUser(userRequest);
 			return CreatedAtAction(nameof(Get), new { id = newUser.Id }, newUser);
 		}
 
@@ -92,29 +69,17 @@ namespace ValidationLoggingBebugging.Controllers
 				return BadRequest(ModelState);
 			}
 
-			var user = UsersCollection.Users.FirstOrDefault(u => u.Id == id);
-			if (user is null)
+			try
 			{
-				logger.LogWarning("User with id={Id} not found", id);
+				userService.UpdateUser(id, userRequest);
+				logger.LogInformation("PUT successfully processed for id={Id}", id);
+				return Ok();
+			}
+			catch (KeyNotFoundException)
+			{
+				logger.LogWarning("User with id={Id} not found for PUT", id);
 				return NotFound();
-			}
-
-			var createdUser = UsersCollection.Users.FirstOrDefault(u => u.Username == userRequest.Username);
-			if (createdUser is not null)
-			{
-				throw new DuplicateUsernameException();
-			}
-
-			user.Username = userRequest.Username;
-			user.Password = userRequest.Password;
-			user.DateOfBirth = userRequest.DateOfBirth;
-			user.Email = userRequest.Email;
-			user.Quantity = userRequest.Quantity;
-			user.Price = userRequest.Price;
-			user.Amount = userRequest.Amount;
-
-			logger.LogInformation("PUT successfully processed for id={Id}", id);
-			return Ok();
+			}		
 		}
 
 		[HttpPatch("{id:int}")]
@@ -125,7 +90,7 @@ namespace ValidationLoggingBebugging.Controllers
 			if (patchDoc == null)
 			{
 				logger.LogWarning("PATCH document is null for id={Id}", id);
-				return BadRequest("Invalid patch document");
+				return BadRequest("Invalid patch document.");
 			}
 
 			if (!ModelState.IsValid)
@@ -134,41 +99,17 @@ namespace ValidationLoggingBebugging.Controllers
 				return BadRequest(ModelState);
 			}
 
-			var userToPatch = UsersCollection.Users.FirstOrDefault(u => u.Id == id);
-			if(userToPatch is null)
+			try
 			{
-				logger.LogWarning("User to patch not found with id={Id}", id);
+				userService.PatchUser(id, patchDoc);
+				logger.LogInformation("User with id={Id} patched successfully", id);
+				return Ok();
+			}
+			catch (KeyNotFoundException)
+			{
+				logger.LogWarning("User with id={Id} not found for PATCH", id);
 				return NotFound();
 			}
-
-
-			var isUsernameBeingUpdated = patchDoc.Operations.Any(op =>
-		              op.path.Equals("/Username", StringComparison.OrdinalIgnoreCase) &&
-		              op.OperationType is OperationType.Replace or OperationType.Add);
-
-			if (isUsernameBeingUpdated)
-			{
-				logger.LogInformation("PATCH includes a Username update for user id={Id}", id);
-
-				var newUsername = patchDoc.Operations
-		             .First(op => op.path.Equals("/Username", StringComparison.OrdinalIgnoreCase))
-		             .value?.ToString();
-
-				var createdUser = UsersCollection.Users.FirstOrDefault(u => u.Username == newUsername);
-				if (createdUser is not null)
-				{
-					throw new DuplicateUsernameException();
-				}
-			}
-			else
-			{
-				logger.LogDebug("PATCH does not include a Username update for user id={Id}", id);
-			}
-
-			patchDoc.ApplyTo(userToPatch, ModelState);
-	
-			logger.LogInformation("User with id={Id} patched successfully", id);
-			return Ok();
 		}
 	}
 }
